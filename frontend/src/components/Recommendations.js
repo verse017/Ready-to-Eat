@@ -30,7 +30,7 @@ function Recommendations() {
           <h1 className="page-title">Top Recommendations</h1>
           <p className="page-subtitle">Highest rated culinary gems across Kathmandu Valley rated 4.0 and above</p>
         </div>
-        <Link to="/add" className="btn btn-primary">+ Suggest a Place</Link>
+        <Link to="/add?from=recommendations" className="btn btn-primary">+ Suggest a Place</Link>
       </div>
 
       {error && (

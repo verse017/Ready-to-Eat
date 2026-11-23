@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 
 import API_BASE from '../api';
 
@@ -24,6 +24,8 @@ function AddRestaurant() {
   const [successMsg, setSuccessMsg] = useState('');
 
   const navigate = useNavigate();
+  const routeLocation = useLocation();
+  const fromRecommendations = new URLSearchParams(routeLocation.search).get('from') === 'recommendations';
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -39,7 +41,7 @@ function AddRestaurant() {
       name: name.trim(),
       cuisine: cuisine.trim(),
       location: location.trim(),
-      rating: parseFloat(rating) || 4.0,
+      rating: parseFloat(rating) || 4.5,
       description: description.trim(),
       image: image.trim() || SAMPLE_IMAGES[0].url
     };
@@ -47,15 +49,19 @@ function AddRestaurant() {
     setSubmitting(true);
 
     try {
-      const res = await axios.post(`${API_BASE}/add`, payload);
-      setSuccessMsg('Restaurant added successfully! Redirecting...');
+      await axios.post(`${API_BASE}/add`, payload);
+      setSuccessMsg('Restaurant suggested successfully! Redirecting...');
       setTimeout(() => {
-        navigate('/');
-      }, 800);
+        if (fromRecommendations) {
+          navigate('/recommendations');
+        } else {
+          navigate('/');
+        }
+      }, 700);
     } catch (err) {
-      console.error(err);
+      console.error('Error adding restaurant:', err);
       const serverError = err.response?.data?.error || err.message;
-      setErrorMsg(`Failed to add restaurant: ${serverError}. Please check that backend is running.`);
+      setErrorMsg(`Could not save restaurant: ${serverError}. Please check connection.`);
       setSubmitting(false);
     }
   };
@@ -64,9 +70,11 @@ function AddRestaurant() {
     <div className="form-page-wrapper">
       <div className="form-container">
         <div className="form-header">
-          <Link to="/" className="back-link">← Back to list</Link>
-          <h1 className="page-title">Add Restaurant</h1>
-          <p className="page-subtitle">Add a new restaurant recommendation in or around Kathmandu</p>
+          <Link to={fromRecommendations ? '/recommendations' : '/'} className="back-link">
+            ← Back to {fromRecommendations ? 'Recommendations' : 'All Restaurants'}
+          </Link>
+          <h1 className="page-title">Suggest a Restaurant</h1>
+          <p className="page-subtitle">Add a dining recommendation in or around Kathmandu Valley</p>
         </div>
 
         {errorMsg && (
@@ -103,7 +111,7 @@ function AddRestaurant() {
                 className="form-control"
                 value={cuisine}
                 onChange={(e) => setCuisine(e.target.value)}
-                placeholder="e.g. Italian / Pizza, Nepali, Middle Eastern"
+                placeholder="e.g. Italian / Pizza, Newari, Continental"
               />
             </div>
 
@@ -139,7 +147,7 @@ function AddRestaurant() {
             </div>
 
             <div className="form-group flex-1">
-              <label className="form-label">Image URL</label>
+              <label className="form-label">Photo URL (Optional)</label>
               <input
                 type="url"
                 className="form-control"
@@ -151,7 +159,7 @@ function AddRestaurant() {
           </div>
 
           <div className="preset-images-group">
-            <span className="preset-label">Or pick a sample photo:</span>
+            <span className="preset-label">Or choose a sample photo:</span>
             <div className="preset-buttons">
               {SAMPLE_IMAGES.map((sample, idx) => (
                 <button
@@ -168,7 +176,7 @@ function AddRestaurant() {
 
           {image && (
             <div className="image-preview-box">
-              <span className="preview-label">Selected Image Preview:</span>
+              <span className="preview-label">Selected Photo Preview:</span>
               <img
                 src={image}
                 alt="Preview"
@@ -184,7 +192,7 @@ function AddRestaurant() {
               className="form-control textarea"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What makes this place special? Specialty dishes, atmosphere, seating..."
+              placeholder="What makes this place special? Recommended dishes, ambience, seating..."
               rows="3"
             />
           </div>
@@ -195,7 +203,7 @@ function AddRestaurant() {
               disabled={submitting}
               className="btn btn-primary btn-block"
             >
-              {submitting ? 'Adding Restaurant...' : 'Save Restaurant'}
+              {submitting ? 'Saving Recommendation...' : 'Save Recommendation'}
             </button>
           </div>
         </form>
