@@ -1,0 +1,155 @@
+name: Deploy Ready to Eat (CloudFormation + SSH)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: ready-to-eat-stack
+
+jobs:
+  build:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install & Test Build Frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy CloudFormation Stack (Create or Update EC2)
+        run: |
+          aws cloudformation deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --template-file infra/ec2-instance.yaml \
+            --parameter-overrides InstanceType=t2.micro \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Retrieve EC2 Public IP
+        id: get-ip
+        run: |
+          IP=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].Outputs[?OutputKey=='PublicIP'].OutputValue" \
+            --output text)
+          echo "EC2_IP=$IP" >> $GITHUB_OUTPUT
+          echo "Server Public IP: $IP"
+
+      - name: Retrieve SSH Key from SSM Parameter Store
+        id: get-key
+        run: |
+          SSM_PATH=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].Outputs[?OutputKey=='SSMKeyPath'].OutputValue" \
+            --output text)
+          aws ssm get-parameter \
+            --name "$SSM_PATH" \
+            --with-decryption \
+            --region ${{ env.AWS_REGION }} \
+            --query "Parameter.Value" \
+            --output text > /tmp/server-key.pem
+          chmod 600 /tmp/server-key.pem
+
+      - name: Wait for SSH Availability
+        run: |
+          IP=${{ steps.get-ip.outputs.EC2_IP }}
+          for i in $(seq 1 36); do
+            if nc -zw5 "$IP" 22 2>/dev/null; then
+              echo "SSH port 22 is open!"
+              exit 0
+            fi
+            echo "Waiting for SSH on $IP... ($i/36)"
+            sleep 10
+          done
+          exit 1
+
+      - name: Deploy Code & Restart Services via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          EC2_IP: ${{ steps.get-ip.outputs.EC2_IP }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        with:
+          host: ${{ steps.get-ip.outputs.EC2_IP }}
+          username: ubuntu
+          key_path: /tmp/server-key.pem
+          script_stop: true
+          envs: EC2_IP,MONGODB_URI,REPO_URL
+          script: |
+            echo ">>> [1/6] Waiting for cloud-init instance bootstrap..."
+            sudo cloud-init status --wait || true
+
+            echo ">>> [2/6] Syncing code on server..."
+            if [ ! -d "/var/www/app/.git" ]; then
+              sudo rm -rf /var/www/app/* /var/www/app/.* 2>/dev/null || true
+              git clone $REPO_URL /var/www/app
+            else
+              cd /var/www/app
+              git fetch origin main
+              git reset --hard origin/main
+            fi
+
+            echo ">>> [3/6] Installing backend dependencies..."
+            cd /var/www/app/backend
+            npm install --omit=dev
+
+            echo ">>> [4/6] Generating backend .env file..."
+            printf "%s\n" \
+              "PORT=5000" \
+              "NODE_ENV=production" \
+              "ATLAS_URI=$MONGODB_URI" \
+              > /var/www/app/backend/.env
+
+            echo ">>> [5/6] Building React frontend for production..."
+            cd /var/www/app/frontend
+            npm install
+            npm run build
+
+            echo ">>> [6/6] Reloading PM2 and Nginx..."
+            cd /var/www/app/backend
+            pm2 delete all 2>/dev/null || true
+            pm2 start ecosystem.config.cjs --update-env
+            pm2 save
+            sudo cp /var/www/app/infra/nginx.conf /etc/nginx/sites-available/app
+            sudo ln -sf /etc/nginx/sites-available/app /etc/nginx/sites-enabled/app
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo nginx -t && sudo systemctl reload nginx
+
+      - name: Print Live Web Application URL
+        run: echo "🎉 Ready to Eat is live at http://${{ steps.get-ip.outputs.EC2_IP }}"
+
+      - name: Clean up temporary SSH key
+        if: always()
+        run: rm -f /tmp/server-key.pem

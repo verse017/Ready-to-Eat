@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Ready to Eat MERN Stack Hosting Infrastructure (EC2 + SSM KeyPair + Security Group)
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: EC2 instance type (t2.micro is free-tier eligible)
+
+  UbuntuAMI:
+    Type: String
+    Default: ami-0e86e20dae9224db8
+    Description: Ubuntu 24.04 LTS AMI in us-east-1
+
+  SSHLocation:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: Allow SSH from anywhere for GitHub Actions runners
+
+Resources:
+  # 1. SSH KeyPair automatically saved to Systems Manager (SSM) Parameter Store
+  ServerKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub "${AWS::StackName}-key"
+
+  # 2. Security Group opening Port 80 (HTTP) and Port 22 (SSH)
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP and SSH
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+
+  # 3. Ubuntu Virtual Machine with Startup Bootstrap (UserData)
+  ServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref UbuntuAMI
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref ServerKeyPair
+      SecurityGroupIds:
+        - !GetAtt ServerSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-server"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          exec > /var/log/userdata.log 2>&1
+
+          # Install Node.js 22, Git, Nginx, PM2
+          apt-get update -y
+          curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          apt-get install -y nodejs nginx git
+          npm install -g pm2
+
+          mkdir -p /var/www/app
+          chown -R ubuntu:ubuntu /var/www/app
+          sudo -u ubuntu pm2 startup systemd -u ubuntu --hp /home/ubuntu | tail -1 | bash
+
+Outputs:
+  PublicIP:
+    Description: Public IP of the server
+    Value: !GetAtt ServerInstance.PublicIp
+
+  PublicURL:
+    Description: Live Web Application URL
+    Value: !Sub "http://${ServerInstance.PublicIp}"
+
+  SSMKeyPath:
+    Description: Parameter Store path for private SSH key
+    Value: !Sub "/ec2/keypair/${ServerKeyPair.KeyPairId}"

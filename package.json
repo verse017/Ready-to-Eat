@@ -1,0 +1,14 @@
+{
+  "name": "ready-to-eat",
+  "version": "1.0.0",
+  "description": "Ready to Eat - Restaurant Recommendation Website",
+  "scripts": {
+    "start": "node backend/server.js",
+    "server": "nodemon backend/server.js",
+    "client": "cd frontend && npm start",
+    "dev": "concurrently \"npm run server\" \"npm run client\""
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
