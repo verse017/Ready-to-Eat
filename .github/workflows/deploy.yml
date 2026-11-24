@@ -100,7 +100,7 @@ jobs:
         env:
           EC2_IP: ${{ steps.get-ip.outputs.EC2_IP }}
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          REPO_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         with:
           host: ${{ steps.get-ip.outputs.EC2_IP }}
           username: ubuntu
@@ -112,11 +112,15 @@ jobs:
             sudo cloud-init status --wait || true
 
             echo ">>> [2/6] Syncing code on server..."
+            sudo mkdir -p /var/www/app
+            sudo chown -R ubuntu:ubuntu /var/www/app
+            git config --global --add safe.directory /var/www/app
             if [ ! -d "/var/www/app/.git" ]; then
               sudo rm -rf /var/www/app/* /var/www/app/.* 2>/dev/null || true
-              git clone $REPO_URL /var/www/app
+              git clone "$REPO_URL" /var/www/app
             else
               cd /var/www/app
+              git remote set-url origin "$REPO_URL"
               git fetch origin main
               git reset --hard origin/main
             fi
